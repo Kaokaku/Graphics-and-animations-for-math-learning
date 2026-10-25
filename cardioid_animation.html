@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>心形线生成动画：等圆外滚</title>
+<style>
+  :root{
+    --bg:#0f1220; --panel:#1a1f33; --ink:#e8ecf5; --muted:#9aa3bf;
+    --fixed:#6b7280; --roll:#4da3ff; --p:#ff5d6c; --q:#3ddc97; --path:#ff5d6c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+       display:flex;flex-direction:column;align-items:center;padding:18px}
+  h1{font-size:18px;font-weight:600;margin:4px 0 2px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:12px}
+  .stage{background:var(--panel);border-radius:14px;padding:10px;
+         box-shadow:0 10px 30px rgba(0,0,0,.35)}
+  canvas{display:block;border-radius:10px;background:#0b0e1a;width:100%;max-width:640px;height:auto}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+            margin-top:12px;justify-content:center}
+  button{background:var(--roll);color:#06203f;border:0;border-radius:8px;
+         padding:8px 14px;font-size:14px;font-weight:600;cursor:pointer}
+  button.ghost{background:#2b3350;color:var(--ink)}
+  label{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  input[type=range]{accent-color:var(--roll)}
+  input[type=checkbox]{accent-color:var(--roll)}
+  .info{font-size:13px;color:var(--muted);margin-top:8px;min-height:18px;text-align:center}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;
+          font-size:12px;color:var(--muted);margin-top:10px}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle}
+</style>
+</head>
+<body>
+  <h1>心形线生成动画 · 等圆外滚</h1>
+  <div class="sub">半径为 r 的圆在另一个等大的圆外无滑动滚动一周，其圆周上动点 P 的轨迹</div>
+
+  <div class="stage">
+    <canvas id="cv" width="760" height="760"></canvas>
+    <div class="controls">
+      <button id="play">⏸ 暂停</button>
+      <button id="reset" class="ghost">↺ 重置</button>
+      <label>速度
+        <input id="speed" type="range" min="0.1" max="3" step="0.1" value="1">
+      </label>
+      <label><input id="showFull" type="checkbox" checked> 显示完整心形线</label>
+      <label><input id="showTrail" type="checkbox" checked> 显示已走轨迹</label>
+    </div>
+    <div class="info" id="info"></div>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--fixed)"></span>固定圆 (圆心 O₁)</span>
+      <span><span class="dot" style="background:var(--roll)"></span>滚动圆 (圆心 O₂)</span>
+      <span><span class="dot" style="background:var(--q)"></span>接触点 Q</span>
+      <span><span class="dot" style="background:var(--p)"></span>固定点 P</span>
+      <span><span class="dot" style="background:var(--path)"></span>P 的轨迹（心形线）</span>
+    </div>
+  </div>
+
+<script>
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const cx = W/2, cy = H/2;     // 画布中心 = 固定圆圆心 O₁
+const r  = 110;               // 圆半径为 r（像素）
+
+// 数学坐标 -> 画布坐标（y 向上）
+function X(x){ return cx + x; }
+function Y(y){ return cy - y; }
+
+// 关键几何（R = r 的外摆线）
+// 滚动圆圆心 O₂ 绕 O₁ 转角为 th
+function O2(th){ return [2*r*Math.cos(th), 2*r*Math.sin(th)]; }
+// 接触点 Q：在 O₁O₂ 连线上，距 O₁ 为 r
+function Q(th){ return [r*Math.cos(th), r*Math.sin(th)]; }
+// 固定点 P：初始在接触点，随滚动圆转动
+function P(th){
+  return [ 2*r*Math.cos(th) - r*Math.cos(2*th),
+           2*r*Math.sin(th) - r*Math.sin(2*th) ];
+}
+
+let theta = 0;          // 当前转角
+let playing = true;
+let last = null;
+let full = true, trail = true;
+
+const playBtn = document.getElementById('play');
+const resetBtn = document.getElementById('reset');
+const speedEl = document.getElementById('speed');
+const showFullEl = document.getElementById('showFull');
+const showTrailEl = document.getElementById('showTrail');
+const infoEl = document.getElementById('info');
+
+playBtn.onclick = ()=>{ playing = !playing; playBtn.textContent = playing ? '⏸ 暂停' : '▶ 播放'; };
+resetBtn.onclick = ()=>{ theta = 0; };
+showFullEl.onchange = ()=> full = showFullEl.checked;
+showTrailEl.onchange = ()=> trail = showTrailEl.checked;
+
+function circle(c, rad, stroke, fill, dashed){
+  ctx.beginPath();
+  ctx.setLineDash(dashed ? [6,7] : []);
+  ctx.arc(X(c[0]), Y(c[1]), rad, 0, Math.PI*2);
+  if(stroke){ ctx.strokeStyle = stroke; ctx.lineWidth = 2.2; ctx.stroke(); }
+  if(fill){ ctx.fillStyle = fill; ctx.fill(); }
+  ctx.setLineDash([]);
+}
+function line(a, b, stroke, w, dashed){
+  ctx.beginPath();
+  ctx.setLineDash(dashed ? [5,6] : []);
+  ctx.moveTo(X(a[0]), Y(a[1]));
+  ctx.lineTo(X(b[0]), Y(b[1]));
+  ctx.strokeStyle = stroke; ctx.lineWidth = w||1.6; ctx.stroke();
+  ctx.setLineDash([]);
+}
+function dot(p, color, radius){
+  ctx.beginPath();
+  ctx.arc(X(p[0]), Y(p[1]), radius||6, 0, Math.PI*2);
+  ctx.fillStyle = color; ctx.fill();
+  ctx.lineWidth=1.5; ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.stroke();
+}
+function label(p, text, color, dx, dy){
+  ctx.fillStyle = color;
+  ctx.font = '600 16px "PingFang SC",system-ui,sans-serif';
+  ctx.fillText(text, X(p[0])+(dx||8), Y(p[1])+(dy||-8));
+}
+
+function curve(samples, from, to){
+  ctx.beginPath();
+  for(let i=0;i<=samples;i++){
+    const t = from + (to-from)*i/samples;
+    const p = P(t);
+    if(i===0) ctx.moveTo(X(p[0]), Y(p[1]));
+    else ctx.lineTo(X(p[0]), Y(p[1]));
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+
+  // O₂ 轨道（虚线，半径 2r）
+  circle([0,0], 2*r, 'rgba(120,130,160,.35)', null, true);
+
+  // 固定圆
+  circle([0,0], r, '#6b7280', 'rgba(107,114,128,.06)');
+
+  const o2 = O2(theta);
+  const q  = Q(theta);
+  const p  = P(theta);
+
+  // 完整心形线（参考）
+  if(full){
+    curve(720, 0, Math.PI*2);
+    ctx.strokeStyle = 'rgba(255,93,108,.30)';
+    ctx.lineWidth = 1.6; ctx.stroke();
+  }
+  // 已走轨迹
+  if(trail && theta>0.001){
+    curve(720, 0, theta);
+    ctx.strokeStyle = '#ff5d6c';
+    ctx.lineWidth = 3; ctx.stroke();
+  }
+
+  // 滚动圆
+  circle(o2, r, '#4da3ff', 'rgba(77,163,255,.10)');
+
+  // 连线
+  line([0,0], o2, 'rgba(150,160,190,.5)', 1.4, true);   // O₁O₂
+  line(o2, q,  'rgba(61,220,151,.9)', 1.8, false);       // O₂Q 接触半径
+  line(o2, p,  '#ff5d6c', 2, false);                     // O₂P
+
+  // 点
+  dot([0,0], '#6b7280', 5); label([0,0], 'O₁', '#cdd4e6', -6, 18);
+  dot(o2, '#4da3ff', 6);   label(o2, 'O₂', '#9fc6ff', 8, -8);
+  dot(q, '#3ddc97', 6);    label(q, 'Q', '#7bf0c0', 8, 14);
+  dot(p, '#ff5d6c', 7);    label(p, 'P', '#ffb3ba', 10, -8);
+
+  const deg = (theta*180/Math.PI);
+  const turns = (theta/(Math.PI*2));
+  infoEl.textContent = `转角 θ = ${deg.toFixed(1)}°  （${(turns*100).toFixed(1)}% 周）   P 距 O₁ = ${(Math.hypot(p[0],p[1])/r).toFixed(2)}·r`;
+}
+
+function tick(ts){
+  if(last===null) last = ts;
+  const dt = (ts - last)/1000; last = ts;
+  if(playing){
+    const omega = 0.7 * parseFloat(speedEl.value); // rad/s
+    theta += omega*dt;
+    if(theta >= Math.PI*2){ theta -= Math.PI*2; } // 循环滚动一周
+  }
+  draw();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
